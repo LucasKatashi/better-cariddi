@@ -39,8 +39,6 @@ This fork improves those areas with safer crawler result handling, disk-backed r
 
 Temporary result files are cleaned up on normal exits. The tool also performs best-effort cleanup on `SIGINT` and `SIGTERM`, and removes stale temporary result files from previous runs when they are older than 24 hours.
 
-Remaining limitation: hard termination cases such as `SIGKILL`, power loss, kernel panic, or unrecoverable crashes may still leave temporary files behind.
-
 <!--[![asciicast](https://asciinema.org/a/415989.svg)](https://asciinema.org/a/415989)-->
 
 <p align="center">
@@ -50,54 +48,7 @@ Remaining limitation: hard termination cases such as `SIGKILL`, power loss, kern
 Installation 📡
 ----------
 
-#### Homebrew
-
-```console
-brew install cariddi
-```
-
-#### Snap
-
-```console
-sudo snap install cariddi
-```
-
-#### Golang
-
-Upstream `cariddi`:
-
-```console
-go install -v github.com/edoardottt/cariddi/cmd/cariddi@latest
-```
-
-This fork keeps the original Go module path (`github.com/edoardottt/cariddi`), so `go install -v github.com/LucasKatashi/better-cariddi/cmd/cariddi@latest` does not work. To install this fork, clone it and install from the local checkout:
-
-```console
-git clone https://github.com/LucasKatashi/better-cariddi.git
-cd better-cariddi
-go install -v ./cmd/cariddi
-```
-
-#### Pacman
-
-```console
-pacman -Syu cariddi
-```
-
-#### NixOS
-
-```console
-nix-shell -p cariddi
-```
-
-#### Building from source
-
-You need [Go](https://go.dev/) (>=1.24.0)
-
-Package-manager installs and the upstream `go install ...@latest` command install upstream `cariddi`. To build this fork, clone `https://github.com/LucasKatashi/better-cariddi`.
-
-<details>
-  <summary>Building from source for Linux and Windows</summary>
+You need [Go](https://go.dev/) (>=1.24.0).
 
 #### Linux
 
@@ -105,13 +56,19 @@ Package-manager installs and the upstream `go install ...@latest` command instal
 git clone https://github.com/LucasKatashi/better-cariddi.git
 cd better-cariddi
 go get ./...
-make linux # (to install)
-make unlinux # (to uninstall)
+make linux # install to /usr/bin/cariddi
+make unlinux # uninstall
 ```
 
-One-liner: `git clone https://github.com/LucasKatashi/better-cariddi.git && cd better-cariddi && go get ./... && make linux`
+#### macOS
 
-#### Windows 
+```console
+git clone https://github.com/LucasKatashi/better-cariddi.git
+cd better-cariddi
+go install -v ./cmd/cariddi
+```
+
+#### Windows
 
 Note that the executable works only inside the checkout folder.
 
@@ -119,11 +76,9 @@ Note that the executable works only inside the checkout folder.
 git clone https://github.com/LucasKatashi/better-cariddi.git
 cd better-cariddi
 go get ./...
-.\make.bat windows # (to install)
-.\make.bat unwindows # (to uninstall)
+.\make.bat windows # build cariddi.exe
+.\make.bat unwindows # remove cariddi.exe
 ```
-
-</details>
 
 Usage 💡
 ----------
