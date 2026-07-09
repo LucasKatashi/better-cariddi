@@ -33,7 +33,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/edoardottt/cariddi/pkg/scanner"
 )
@@ -83,8 +86,15 @@ type recordStore[T any] struct {
 
 var errStoreClosed = errors.New("result store closed")
 
-func newRecordStore[T any]() (*recordStore[T], error) {
-	file, err := os.CreateTemp("", "cariddi-results-*.jsonl")
+const (
+	DefaultStaleAge      = 24 * time.Hour
+	TempDirPrefix        = "better-cariddi-results-"
+	legacyTempFilePrefix = "cariddi-results-"
+	storeFilePerm        = 0600
+)
+
+func newRecordStore[T any](dir, name string) (*recordStore[T], error) {
+	file, err := os.OpenFile(filepath.Join(dir, name+".jsonl"), os.O_RDWR|os.O_CREATE|os.O_EXCL, storeFilePerm)
 	if err != nil {
 		return nil, err
 	}
@@ -172,26 +182,21 @@ func (s *recordStore[T]) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	name := s.file.Name()
 	if s.closed {
 		return nil
 	}
 
-	closeErr := s.file.Close()
+	err := s.file.Close()
 	s.closed = true
-	removeErr := os.Remove(name)
-	if closeErr != nil {
-		return closeErr
-	}
-	if errors.Is(removeErr, os.ErrNotExist) {
-		return nil
-	}
 
-	return removeErr
+	return err
 }
 
 // Store keeps fixed-size dedupe digests in memory and streams unique result payloads to temp files.
 type Store struct {
+	mu         sync.Mutex
+	dir        string
+	closed     bool
 	urls       *recordStore[urlRecord]
 	secrets    *recordStore[secretRecord]
 	endpoints  *recordStore[endpointRecord]
@@ -201,52 +206,70 @@ type Store struct {
 }
 
 func New() (*Store, error) {
-	urls, err := newRecordStore[urlRecord]()
+	dir, err := os.MkdirTemp("", TempDirPrefix)
 	if err != nil {
 		return nil, err
 	}
 
-	secrets, err := newRecordStore[secretRecord]()
+	urls, err := newRecordStore[urlRecord](dir, "urls")
+	if err != nil {
+		_ = os.RemoveAll(dir)
+
+		return nil, err
+	}
+
+	secrets, err := newRecordStore[secretRecord](dir, "secrets")
 	if err != nil {
 		_ = urls.Close()
+		_ = os.RemoveAll(dir)
+
 		return nil, err
 	}
 
-	endpoints, err := newRecordStore[endpointRecord]()
+	endpoints, err := newRecordStore[endpointRecord](dir, "endpoints")
 	if err != nil {
 		_ = urls.Close()
 		_ = secrets.Close()
+		_ = os.RemoveAll(dir)
+
 		return nil, err
 	}
 
-	extensions, err := newRecordStore[extensionRecord]()
+	extensions, err := newRecordStore[extensionRecord](dir, "extensions")
 	if err != nil {
 		_ = urls.Close()
 		_ = secrets.Close()
 		_ = endpoints.Close()
+		_ = os.RemoveAll(dir)
+
 		return nil, err
 	}
 
-	errors, err := newRecordStore[errorRecord]()
+	errors, err := newRecordStore[errorRecord](dir, "errors")
 	if err != nil {
 		_ = urls.Close()
 		_ = secrets.Close()
 		_ = endpoints.Close()
 		_ = extensions.Close()
+		_ = os.RemoveAll(dir)
+
 		return nil, err
 	}
 
-	infos, err := newRecordStore[infoRecord]()
+	infos, err := newRecordStore[infoRecord](dir, "infos")
 	if err != nil {
 		_ = urls.Close()
 		_ = secrets.Close()
 		_ = endpoints.Close()
 		_ = extensions.Close()
 		_ = errors.Close()
+		_ = os.RemoveAll(dir)
+
 		return nil, err
 	}
 
 	return &Store{
+		dir:        dir,
 		urls:       urls,
 		secrets:    secrets,
 		endpoints:  endpoints,
@@ -254,6 +277,56 @@ func New() (*Store, error) {
 		errors:     errors,
 		infos:      infos,
 	}, nil
+}
+
+func CleanupStale(maxAge time.Duration) error {
+	return CleanupStaleIn(os.TempDir(), maxAge)
+}
+
+func CleanupStaleIn(parent string, maxAge time.Duration) error {
+	return cleanupStaleIn(parent, maxAge, time.Now())
+}
+
+func cleanupStaleIn(parent string, maxAge time.Duration, now time.Time) error {
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		return err
+	}
+
+	var cleanupErr error
+	for _, entry := range entries {
+		if !isTempResultEntry(entry.Name()) {
+			continue
+		}
+
+		path := filepath.Join(parent, entry.Name())
+		info, err := entry.Info()
+		if err != nil {
+			cleanupErr = errors.Join(cleanupErr, err)
+			continue
+		}
+
+		if now.Sub(info.ModTime()) < maxAge {
+			continue
+		}
+
+		if err := os.RemoveAll(path); err != nil {
+			cleanupErr = errors.Join(cleanupErr, err)
+		}
+	}
+
+	return cleanupErr
+}
+
+func isTempResultEntry(name string) bool {
+	return strings.HasPrefix(name, TempDirPrefix) || strings.HasPrefix(name, legacyTempFilePrefix)
+}
+
+func (s *Store) TempDir() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.dir
 }
 
 func (s *Store) AddURL(input string) {
@@ -413,6 +486,15 @@ func (s *Store) Err() error {
 }
 
 func (s *Store) Close() error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closed = true
+	dir := s.dir
+	s.mu.Unlock()
+
 	var closeErr error
 	stores := []struct {
 		name  string
@@ -430,6 +512,9 @@ func (s *Store) Close() error {
 		if err := store.close(); err != nil && closeErr == nil {
 			closeErr = fmt.Errorf("%s result store: %w", store.name, err)
 		}
+	}
+	if err := os.RemoveAll(dir); err != nil && closeErr == nil {
+		closeErr = fmt.Errorf("temp result directory: %w", err)
 	}
 
 	return closeErr

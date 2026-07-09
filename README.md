@@ -37,7 +37,9 @@ This fork focuses on better stability for large wordlists, safer concurrency, an
 
 This fork improves those areas with safer crawler result handling, disk-backed result storage, streaming output, streaming stdin processing, and incremental SHA-256-based deduplication. The changes were validated with `go test ./...` and `go test -race ./...`.
 
-Remaining limitation: unique results still use temporary disk space until the process exits normally. Abnormal termination may leave temporary files behind.
+Temporary result files are cleaned up on normal exits. The tool also performs best-effort cleanup on `SIGINT` and `SIGTERM`, and removes stale temporary result files from previous runs when they are older than 24 hours.
+
+Remaining limitation: hard termination cases such as `SIGKILL`, power loss, kernel panic, or unrecoverable crashes may still leave temporary files behind.
 
 <!--[![asciicast](https://asciinema.org/a/415989.svg)](https://asciinema.org/a/415989)-->
 

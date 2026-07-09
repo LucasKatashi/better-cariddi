@@ -28,9 +28,13 @@ package resultstore_test
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/edoardottt/cariddi/internal/resultstore"
 	"github.com/edoardottt/cariddi/pkg/scanner"
@@ -154,13 +158,65 @@ func TestStoreConcurrentAdds(t *testing.T) {
 
 func TestStoreCloseIsIdempotent(t *testing.T) {
 	store := newTestStore(t)
+	tempDir := store.TempDir()
+	if !strings.Contains(filepath.Base(tempDir), resultstore.TempDirPrefix) {
+		t.Fatalf("TempDir() = %q, want prefix %q", tempDir, resultstore.TempDirPrefix)
+	}
 
 	store.AddURL("https://example.com")
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := os.Stat(tempDir); !os.IsNotExist(err) {
+		t.Fatalf("temp dir still exists after Close(): %v", err)
+	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCleanupStaleRemovesOldResultTempsOnly(t *testing.T) {
+	parent := t.TempDir()
+	now := time.Now()
+	oldTime := now.Add(-(resultstore.DefaultStaleAge + time.Hour))
+	freshTime := now.Add(-time.Hour)
+
+	oldDir := filepath.Join(parent, resultstore.TempDirPrefix+"old")
+	freshDir := filepath.Join(parent, resultstore.TempDirPrefix+"fresh")
+	unrelatedDir := filepath.Join(parent, "other-old")
+	legacyFile := filepath.Join(parent, "cariddi-results-old.jsonl")
+
+	for _, dir := range []string{oldDir, freshDir, unrelatedDir} {
+		if err := os.Mkdir(dir, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(legacyFile, []byte("stale"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, path := range []string{oldDir, unrelatedDir, legacyFile} {
+		if err := os.Chtimes(path, oldTime, oldTime); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chtimes(freshDir, freshTime, freshTime); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := resultstore.CleanupStaleIn(parent, resultstore.DefaultStaleAge); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, path := range []string{oldDir, legacyFile} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("stale temp path still exists %q: %v", path, err)
+		}
+	}
+	for _, path := range []string{freshDir, unrelatedDir} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("non-stale path removed %q: %v", path, err)
+		}
 	}
 }
 

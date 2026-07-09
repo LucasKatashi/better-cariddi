@@ -31,6 +31,7 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"syscall"
 
 	fileUtils "github.com/edoardottt/cariddi/internal/file"
 	"github.com/edoardottt/cariddi/internal/resultstore"
@@ -139,6 +140,9 @@ func main() {
 
 		config.Headers = input.GetHeaders(headersInput)
 	}
+	if err := resultstore.CleanupStale(resultstore.DefaultStaleAge); err != nil && flags.Debug {
+		fmt.Fprintln(os.Stderr, err)
+	}
 
 	results, err := resultstore.New()
 	if err != nil {
@@ -171,13 +175,13 @@ func main() {
 	}
 
 	chanC := make(chan os.Signal, 1)
-	signal.Notify(chanC, os.Interrupt)
+	signal.Notify(chanC, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(chanC)
 	go func() {
-		<-chanC
+		sig := <-chanC
 		if flags.Debug {
 			fmt.Fprint(os.Stdout, "\r")
-			fmt.Println("CTRL+C pressed: Exiting immediately")
+			fmt.Printf("%s received: Exiting immediately\n", sig)
 		}
 		if err := cleanup(); err != nil && flags.Debug {
 			fmt.Println(err)
