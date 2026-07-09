@@ -64,8 +64,18 @@ sudo snap install cariddi
 
 #### Golang
 
+Upstream `cariddi`:
+
 ```console
 go install -v github.com/edoardottt/cariddi/cmd/cariddi@latest
+```
+
+This fork keeps the original Go module path (`github.com/edoardottt/cariddi`), so `go install -v github.com/LucasKatashi/better-cariddi/cmd/cariddi@latest` does not work. To install this fork, clone it and install from the local checkout:
+
+```console
+git clone https://github.com/LucasKatashi/better-cariddi.git
+cd better-cariddi
+go install -v ./cmd/cariddi
 ```
 
 #### Pacman
@@ -84,28 +94,30 @@ nix-shell -p cariddi
 
 You need [Go](https://go.dev/) (>=1.24.0)
 
+Package-manager installs and the upstream `go install ...@latest` command install upstream `cariddi`. To build this fork, clone `https://github.com/LucasKatashi/better-cariddi`.
+
 <details>
   <summary>Building from source for Linux and Windows</summary>
 
 #### Linux
 
 ```console
-git clone https://github.com/edoardottt/cariddi.git
-cd cariddi
+git clone https://github.com/LucasKatashi/better-cariddi.git
+cd better-cariddi
 go get ./...
 make linux # (to install)
 make unlinux # (to uninstall)
 ```
 
-One-liner: `git clone https://github.com/edoardottt/cariddi.git && cd cariddi && go get ./... && make linux`
+One-liner: `git clone https://github.com/LucasKatashi/better-cariddi.git && cd better-cariddi && go get ./... && make linux`
 
 #### Windows 
 
-Note that the executable works only in cariddi folder.
+Note that the executable works only inside the checkout folder.
 
 ```console
-git clone https://github.com/edoardottt/cariddi.git
-cd cariddi
+git clone https://github.com/LucasKatashi/better-cariddi.git
+cd better-cariddi
 go get ./...
 .\make.bat windows # (to install)
 .\make.bat unwindows # (to uninstall)
