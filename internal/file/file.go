@@ -72,6 +72,16 @@ func CreateHostOutputFolder(host string) {
 // if no cariddi creates it.
 // Whenever an instruction fails, it exits with an error message.
 func CreateOutputFile(target string, subcommand string, format string) string {
+	filename, err := CreateOutputFileE(target, subcommand, format)
+	if err != nil {
+		fmt.Println("Can't create output file.")
+		os.Exit(1)
+	}
+
+	return filename
+}
+
+func CreateOutputFileE(target string, subcommand string, format string) (string, error) {
 	target = ReplaceBadCharacterOutput(target)
 
 	var filename string
@@ -89,29 +99,31 @@ func CreateOutputFile(target string, subcommand string, format string) string {
 		// If the file doesn't exist, create it.
 		f, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY, Permission0644)
 		if err != nil {
-			fmt.Println("Can't create output file.")
-			os.Exit(1)
+			return "", err
 		}
 
-		f.Close()
+		if err := f.Close(); err != nil {
+			return "", err
+		}
 	} else {
 		// The file already exists, overwrite.
 		f, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY, Permission0644)
 		if err != nil {
-			fmt.Println("Can't create output file.")
-			os.Exit(1)
+			return "", err
 		}
 
 		err = f.Truncate(0)
 		if err != nil {
-			fmt.Println("Can't create output file.")
-			os.Exit(1)
+			_ = f.Close()
+			return "", err
 		}
 
-		f.Close()
+		if err := f.Close(); err != nil {
+			return "", err
+		}
 	}
 
-	return filename
+	return filename, nil
 }
 
 // CreateIndexOutputFile takes as input the name of the index file.

@@ -40,6 +40,15 @@ type Results struct {
 	Infos      []scanner.InfoMatched
 }
 
+type ResultSink interface {
+	AddURL(string)
+	AddSecrets(...scanner.SecretMatched)
+	AddEndpoints(...scanner.EndpointMatched)
+	AddExtensions(...scanner.FileTypeMatched)
+	AddErrors(...scanner.ErrorMatched)
+	AddInfos(...scanner.InfoMatched)
+}
+
 type Scan struct {
 	// Flags
 	Cache            bool
@@ -73,6 +82,7 @@ type Scan struct {
 	// Storage
 	SecretsSlice   []string
 	EndpointsSlice []string
+	ResultSink     ResultSink
 }
 
 type Event struct {

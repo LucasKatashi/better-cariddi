@@ -28,11 +28,12 @@ package input
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 
-	sliceUtils "github.com/edoardottt/cariddi/internal/slice"
 	pdutils "github.com/projectdiscovery/utils/file"
 )
 
@@ -40,26 +41,58 @@ const (
 	coupleSize = 2
 )
 
+var ErrNoInput = errors.New("No input provided.")
+
+func CheckStdin() error {
+	if !pdutils.HasStdin() {
+		return ErrNoInput
+	}
+
+	return nil
+}
+
 // ScanTargets return the array of elements
 // taken as input on stdin.
 func ScanTargets() []string {
-	if !pdutils.HasStdin() {
-		fmt.Println("No input provided.")
+	var result []string
+
+	if err := ForEachTarget(func(domain string) error {
+		result = append(result, domain)
+		return nil
+	}); err != nil {
+		fmt.Println(err)
 		os.Exit(1)
 	}
 
-	var result []string
+	return result
+}
+
+// ForEachTarget streams unique targets from stdin.
+func ForEachTarget(fn func(string) error) error {
+	if err := CheckStdin(); err != nil {
+		return err
+	}
+
+	seen := make(map[[sha256.Size]byte]struct{})
 
 	// accept domains on stdin
 	sc := bufio.NewScanner(os.Stdin)
 	for sc.Scan() {
 		domain := strings.ToLower(sc.Text())
 		if len(domain) > coupleSize {
-			result = append(result, domain)
+			digest := sha256.Sum256([]byte(domain))
+			if _, ok := seen[digest]; ok {
+				continue
+			}
+
+			seen[digest] = struct{}{}
+			if err := fn(domain); err != nil {
+				return err
+			}
 		}
 	}
 
-	return sliceUtils.RemoveDuplicateValues(result)
+	return sc.Err()
 }
 
 // GetHeaders returns the headers provided as input

@@ -33,8 +33,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/signal"
 	"strings"
+	"sync"
 	"time"
 
 	fileUtils "github.com/edoardottt/cariddi/internal/file"
@@ -56,6 +56,7 @@ func New(scan *Scan) *Results {
 	var targetTemp, protocolTemp string
 
 	results := &Results{}
+	var resultsMu sync.Mutex
 
 	// if there isn't a scheme use http.
 	if !urlUtils.HasProtocol(scan.Target) {
@@ -120,21 +121,49 @@ func New(scan *Scan) *Results {
 	registerXMLEvents(c, event)
 
 	c.OnRequest(func(r *colly.Request) {
+		requestURL, ok := requestURLString(r)
+		if !ok {
+			if scan.Debug {
+				log.Println("skipping request with nil URL")
+			}
+
+			return
+		}
+
 		// Add headers (if needed) on each request
 		if (len(scan.Headers)) > 0 {
+			if r.Headers == nil {
+				r.Headers = &http.Header{}
+			}
+
 			for header, value := range scan.Headers {
 				r.Headers.Set(header, value)
 			}
 		}
 
-		results.URLs = append(results.URLs, r.URL.String())
+		if scan.ResultSink != nil {
+			scan.ResultSink.AddURL(requestURL)
+		} else {
+			resultsMu.Lock()
+			results.URLs = append(results.URLs, requestURL)
+			resultsMu.Unlock()
+		}
 
 		if !scan.JSON {
-			fmt.Println(r.URL.String())
+			fmt.Println(requestURL)
 		}
 	})
 
 	c.OnResponse(func(r *colly.Response) {
+		responseURL, ok := responseURLString(r)
+		if !ok {
+			if scan.Debug {
+				log.Println("skipping response with nil request URL")
+			}
+
+			return
+		}
+
 		if scan.StoreResp {
 			err := output.StoreHTTPResponse(r)
 			if err != nil {
@@ -151,6 +180,11 @@ func New(scan *Scan) *Results {
 		errors := []scanner.ErrorMatched{}
 		infos := []scanner.InfoMatched{}
 		filetype := &scanner.FileType{}
+		secretsSlice := []scanner.SecretMatched{}
+		endpointsSlice := []scanner.EndpointMatched{}
+		extensionsSlice := []scanner.FileTypeMatched{}
+		errorsSlice := []scanner.ErrorMatched{}
+		infosSlice := []scanner.InfoMatched{}
 
 		// Skip if no scanning is enabled
 		if !scan.EndpointsFlag && !scan.SecretsFlag && (scan.FileType < 1 || scan.FileType > 7) &&
@@ -161,40 +195,54 @@ func New(scan *Scan) *Results {
 		// HERE SCAN FOR SECRETS
 		if scan.SecretsFlag && lengthOk &&
 			!sliceUtils.Contains(scan.IgnoreExtensions, urlUtils.GetURLExtension(r.Request.URL)) {
-			secretsSlice := huntSecrets(r.Request.URL.String(), bodyStr, &scan.SecretsSlice)
-			results.Secrets = append(results.Secrets, secretsSlice...)
+			secretsSlice = huntSecrets(responseURL, bodyStr, &scan.SecretsSlice)
 			secrets = append(secrets, secretsSlice...)
 		}
 		// HERE SCAN FOR ENDPOINTS
 		if scan.EndpointsFlag {
-			endpointsSlice := huntEndpoints(r.Request.URL.String(), &scan.EndpointsSlice)
-			for _, elem := range endpointsSlice {
+			matchedEndpoints := huntEndpoints(responseURL, &scan.EndpointsSlice)
+			for _, elem := range matchedEndpoints {
 				if len(elem.Parameters) != 0 {
-					results.Endpoints = append(results.Endpoints, elem)
+					endpointsSlice = append(endpointsSlice, elem)
 					parameters = append(parameters, elem.Parameters...)
 				}
 			}
 		}
 		// HERE SCAN FOR EXTENSIONS
 		if 1 <= scan.FileType && scan.FileType <= 7 {
-			extension := huntExtensions(r.Request.URL.String(), scan.FileType)
+			extension := huntExtensions(responseURL, scan.FileType)
 			if extension.URL != "" {
-				results.Extensions = append(results.Extensions, extension)
+				extensionsSlice = append(extensionsSlice, extension)
 				filetype = &extension.Filetype
 			}
 		}
 		// HERE SCAN FOR ERRORS
 		if scan.ErrorsFlag && !sliceUtils.Contains(scan.IgnoreExtensions, urlUtils.GetURLExtension(r.Request.URL)) {
-			errorsSlice := huntErrors(r.Request.URL.String(), bodyStr)
-			results.Errors = append(results.Errors, errorsSlice...)
+			errorsSlice = huntErrors(responseURL, bodyStr)
 			errors = append(errors, errorsSlice...)
 		}
 
 		// HERE SCAN FOR INFOS
 		if scan.InfoFlag && !sliceUtils.Contains(scan.IgnoreExtensions, urlUtils.GetURLExtension(r.Request.URL)) {
-			infosSlice := huntInfos(r.Request.URL.String(), bodyStr)
-			results.Infos = append(results.Infos, infosSlice...)
+			infosSlice = huntInfos(responseURL, bodyStr)
 			infos = append(infos, infosSlice...)
+		}
+
+		if scan.ResultSink != nil {
+			scan.ResultSink.AddSecrets(secretsSlice...)
+			scan.ResultSink.AddEndpoints(endpointsSlice...)
+			scan.ResultSink.AddExtensions(extensionsSlice...)
+			scan.ResultSink.AddErrors(errorsSlice...)
+			scan.ResultSink.AddInfos(infosSlice...)
+		} else if len(secretsSlice) != 0 || len(endpointsSlice) != 0 || len(extensionsSlice) != 0 ||
+			len(errorsSlice) != 0 || len(infosSlice) != 0 {
+			resultsMu.Lock()
+			results.Secrets = append(results.Secrets, secretsSlice...)
+			results.Endpoints = append(results.Endpoints, endpointsSlice...)
+			results.Extensions = append(results.Extensions, extensionsSlice...)
+			results.Errors = append(results.Errors, errorsSlice...)
+			results.Infos = append(results.Infos, infosSlice...)
+			resultsMu.Unlock()
 		}
 
 		if scan.JSON {
@@ -238,24 +286,6 @@ func New(scan *Scan) *Results {
 		log.Println(err)
 	}
 
-	// Setup graceful exit (immediate exit on CTRL+C)
-	chanC := make(chan os.Signal, 1)
-	signal.Notify(chanC, os.Interrupt)
-
-	go func() {
-		<-chanC
-
-		if scan.Debug {
-			fmt.Fprint(os.Stdout, "\r")
-			fmt.Println("CTRL+C pressed: Exiting immediately")
-		}
-
-		// CLEANUP LOGIC
-		// return *results?
-
-		os.Exit(1)
-	}()
-
 	c.Wait()
 
 	if scan.HTML != "" {
@@ -263,6 +293,22 @@ func New(scan *Scan) *Results {
 	}
 
 	return results
+}
+
+func requestURLString(r *colly.Request) (string, bool) {
+	if r == nil || r.URL == nil {
+		return "", false
+	}
+
+	return r.URL.String(), true
+}
+
+func responseURLString(r *colly.Response) (string, bool) {
+	if r == nil || r.Request == nil || r.Request.URL == nil {
+		return "", false
+	}
+
+	return r.Request.URL.String(), true
 }
 
 // CreateColly takes as input all the settings needed to instantiate

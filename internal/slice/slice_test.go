@@ -35,6 +35,11 @@ import (
 )
 
 func TestRemoveDuplicateValues(t *testing.T) {
+	largeInput := make([]string, 0, 10000)
+	for i := range 10000 {
+		largeInput = append(largeInput, string(rune('a'+(i%26))))
+	}
+
 	tests := []struct {
 		name  string
 		slice []string
@@ -64,6 +69,14 @@ func TestRemoveDuplicateValues(t *testing.T) {
 			name:  "has duplicates",
 			slice: []string{"a", "b", "c", "e", "c", "a"},
 			want:  []string{"a", "b", "c", "e"},
+		},
+		{
+			name:  "large duplicate slice",
+			slice: largeInput,
+			want: []string{
+				"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
+				"n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
+			},
 		},
 	}
 	for _, tt := range tests {

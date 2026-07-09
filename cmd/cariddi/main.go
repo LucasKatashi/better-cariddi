@@ -29,13 +29,14 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/signal"
+	"sync"
 
 	fileUtils "github.com/edoardottt/cariddi/internal/file"
-	sliceUtils "github.com/edoardottt/cariddi/internal/slice"
+	"github.com/edoardottt/cariddi/internal/resultstore"
 	"github.com/edoardottt/cariddi/pkg/crawler"
 	"github.com/edoardottt/cariddi/pkg/input"
 	"github.com/edoardottt/cariddi/pkg/output"
-	"github.com/edoardottt/cariddi/pkg/scanner"
 )
 
 func main() {
@@ -91,8 +92,10 @@ func main() {
 		IgnoreExtensions: flags.IgnoreExtensions,
 	}
 
-	// Read the targets from standard input.
-	targets := input.ScanTargets()
+	if err := input.CheckStdin(); err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
 
 	// Check if there are errors in the flags definition.
 	input.CheckFlags(flags)
@@ -108,13 +111,6 @@ func main() {
 	if flags.SecretsFile != "" {
 		config.SecretsSlice = fileUtils.ReadFile(flags.SecretsFile)
 	}
-
-	finalResults := []string{}
-	finalSecret := []scanner.SecretMatched{}
-	finalEndpoints := []scanner.EndpointMatched{}
-	finalExtensions := []scanner.FileTypeMatched{}
-	finalErrors := []scanner.ErrorMatched{}
-	finalInfos := []scanner.InfoMatched{}
 
 	// Create output files if needed (txt / html).
 	config.Txt = ""
@@ -144,82 +140,88 @@ func main() {
 		config.Headers = input.GetHeaders(headersInput)
 	}
 
-	// For each target generate a crawler and collect all the results.
-	for _, target := range targets {
-		config.Target = target
-		results := crawler.New(config)
-		finalResults = append(finalResults, results.URLs...)
-		finalSecret = append(finalSecret, results.Secrets...)
-		finalEndpoints = append(finalEndpoints, results.Endpoints...)
-		finalExtensions = append(finalExtensions, results.Extensions...)
-		finalErrors = append(finalErrors, results.Errors...)
-		finalInfos = append(finalInfos, results.Infos...)
+	results, err := resultstore.New()
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
 	}
 
-	// Remove duplicates from all the results.
-	finalResults = sliceUtils.RemoveDuplicateValues(finalResults)
-	finalSecret = scanner.RemoveDuplicateSecrets(finalSecret)
-	finalEndpoints = scanner.RemovDuplicateEndpoints(finalEndpoints)
-	finalExtensions = scanner.RemoveDuplicateExtensions(finalExtensions)
-	finalErrors = scanner.RemoveDuplicateErrors(finalErrors)
-	finalInfos = scanner.RemoveDuplicateInfos(finalInfos)
+	var cleanupOnce sync.Once
+	var cleanupErr error
+	cleanup := func() error {
+		cleanupOnce.Do(func() {
+			cleanupErr = results.Close()
+		})
+
+		return cleanupErr
+	}
+	defer func() {
+		if err := cleanup(); err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+	}()
+	exitWithError := func(err error) {
+		fmt.Println(err)
+		if closeErr := cleanup(); closeErr != nil {
+			fmt.Println(closeErr)
+		}
+
+		os.Exit(1)
+	}
+
+	chanC := make(chan os.Signal, 1)
+	signal.Notify(chanC, os.Interrupt)
+	defer signal.Stop(chanC)
+	go func() {
+		<-chanC
+		if flags.Debug {
+			fmt.Fprint(os.Stdout, "\r")
+			fmt.Println("CTRL+C pressed: Exiting immediately")
+		}
+		if err := cleanup(); err != nil && flags.Debug {
+			fmt.Println(err)
+		}
+
+		os.Exit(1)
+	}()
+
+	config.ResultSink = results
+
+	// For each target generate a crawler and collect all the results.
+	err = input.ForEachTarget(func(target string) error {
+		config.Target = target
+		crawler.New(config)
+
+		return results.Err()
+	})
+	if err != nil {
+		exitWithError(err)
+	}
+
+	if err := results.Err(); err != nil {
+		exitWithError(err)
+	}
 
 	// IF TXT OUTPUT >
 	if flags.TXTout != "" {
-		output.TxtOutput(flags, finalResults, finalSecret, finalEndpoints,
-			finalExtensions, finalErrors, finalInfos)
+		if err := output.TxtOutputStream(flags, results); err != nil {
+			exitWithError(err)
+		}
 	}
 
 	// IF HTML OUTPUT >
 	if flags.HTMLout != "" {
-		output.WriteSummaryCard(ResultHTML, len(finalResults), len(finalSecret), len(finalEndpoints),
-			len(finalExtensions), len(finalErrors), len(finalInfos))
-		output.HTMLOutput(flags, ResultHTML, finalResults, finalSecret,
-			finalEndpoints, finalExtensions, finalErrors, finalInfos)
-	}
-
-	// If needed print secrets.
-	if !flags.JSON && !flags.Plain && len(finalSecret) != 0 {
-		for _, elem := range finalSecret {
-			output.EncapsulateCustomGreen(elem.Secret.Name, fmt.Sprintf("%s in %s", elem.Match, elem.URL))
+		if err := output.WriteSummaryCardStream(ResultHTML, results.URLCount(), results.SecretCount(), results.EndpointCount(),
+			results.ExtensionCount(), results.ErrorCount(), results.InfoCount()); err != nil {
+			exitWithError(err)
+		}
+		if err := output.HTMLOutputStream(flags, ResultHTML, results); err != nil {
+			exitWithError(err)
 		}
 	}
 
-	// If needed print endpoints.
-	if !flags.JSON && !flags.Plain && len(finalEndpoints) != 0 {
-		for _, elem := range finalEndpoints {
-			for _, parameter := range elem.Parameters {
-				finalString := "" + parameter.Parameter
-				if len(parameter.Attacks) != 0 {
-					finalString += " -"
-					for _, attack := range parameter.Attacks {
-						finalString += " " + attack
-					}
-				}
-
-				output.EncapsulateCustomGreen(finalString, fmt.Sprintf(" in %s", elem.URL))
-			}
-		}
-	}
-
-	// If needed print extensions.
-	if !flags.JSON && !flags.Plain && len(finalExtensions) != 0 {
-		for _, elem := range finalExtensions {
-			output.EncapsulateCustomGreen(elem.Filetype.Extension, fmt.Sprintf("%s matched!", elem.URL))
-		}
-	}
-
-	// If needed print errors.
-	if !flags.JSON && !flags.Plain && len(finalErrors) != 0 {
-		for _, elem := range finalErrors {
-			output.EncapsulateCustomGreen(elem.Error.ErrorName, fmt.Sprintf("%s in %s", elem.Match, elem.URL))
-		}
-	}
-
-	// If needed print infos.
-	if !flags.JSON && !flags.Plain && len(finalInfos) != 0 {
-		for _, elem := range finalInfos {
-			output.EncapsulateCustomGreen(elem.Info.Name, fmt.Sprintf("%s in %s", elem.Match, elem.URL))
-		}
+	if err := output.PrintFindingsStream(flags, results); err != nil {
+		exitWithError(err)
 	}
 }

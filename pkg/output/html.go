@@ -122,11 +122,18 @@ func BannerHTML(filename string) {
 
 // WriteSummaryCard adds a summary card.
 func WriteSummaryCard(filename string, results, secrets, endpoints, extensions, errors, infos int) {
-	file, err := os.OpenFile(filename, os.O_APPEND|os.O_WRONLY, fileUtils.Permission0644)
-	if err != nil {
+	if err := WriteSummaryCardStream(filename, results, secrets, endpoints, extensions, errors, infos); err != nil {
 		log.Println(err)
 		os.Exit(1)
 	}
+}
+
+func WriteSummaryCardStream(filename string, results, secrets, endpoints, extensions, errors, infos int) error {
+	file, err := os.OpenFile(filename, os.O_APPEND|os.O_WRONLY, fileUtils.Permission0644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
 
 	content := fmt.Sprintf(`<div class="summary-card">
 	<h2>Scan Summary</h2>
@@ -144,12 +151,10 @@ func WriteSummaryCard(filename string, results, secrets, endpoints, extensions, 
 
 	_, err = file.WriteString(content)
 	if err != nil {
-		file.Close()
-		log.Println(err)
-		os.Exit(1)
+		return err
 	}
 
-	file.Close()
+	return nil
 }
 
 // AppendOutputToHTML appends the output to html file.
