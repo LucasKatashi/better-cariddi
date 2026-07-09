@@ -28,6 +28,17 @@
   <a href="#license-">License</a>
 </p>
 
+About this fork
+----------
+
+This repository is a fork of the original [`cariddi`](https://github.com/edoardottt/cariddi) project. Credit and thanks go to edoardottt and upstream contributors for building and maintaining the original tool.
+
+This fork focuses on better stability for large wordlists, safer concurrency, and lower memory usage. The original implementation could crash during long-running scans with large inputs due to nil pointer dereferences, unsafe concurrent result handling, and unbounded in-memory result accumulation.
+
+This fork improves those areas with safer crawler result handling, disk-backed result storage, streaming output, streaming stdin processing, and incremental SHA-256-based deduplication. The changes were validated with `go test ./...` and `go test -race ./...`.
+
+Remaining limitation: unique results still use temporary disk space until the process exits normally. Abnormal termination may leave temporary files behind.
+
 <!--[![asciicast](https://asciinema.org/a/415989.svg)](https://asciinema.org/a/415989)-->
 
 <p align="center">
